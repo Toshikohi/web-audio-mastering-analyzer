@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Web Audio Mastering Analyzer</title>
+  <link rel="stylesheet" href="/src/styles/main.css">
+</head>
+<body>
+
+  <!-- Header -->
+  <header>
+    <div class="logo-area">
+      <div class="logo-icon">
+        <svg viewBox="0 0 24 24">
+          <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/>
+        </svg>
+      </div>
+      <div>
+        <h1>Web Audio Mastering Analyzer</h1>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main>
+    <!-- Drop & Load Zone (Fixed Compact Design) -->
+    <div class="drop-zone" id="dropZone">
+      <input type="file" id="fileInput" class="file-input" accept="audio/*">
+      <div class="drop-content">
+        <svg class="drop-icon" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="17 8 12 3 7 8"/>
+          <line x1="12" y1="3" x2="12" y2="15"/>
+        </svg>
+        <div class="drop-text-group">
+          <div class="drop-title">Drag &amp; drop audio file here or click to browse</div>
+          <div class="drop-desc">Supports: MP3, WAV, FLAC, OGG, AAC, M4A (Client-side processing, no upload)</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Test Tone Generator Toolbar -->
+    <div class="test-tone-bar" id="testToneBar">
+      <div class="test-tone-label">
+        <span>🧪</span>
+        <span>Test Signals:</span>
+      </div>
+      <div class="test-tone-buttons" id="testToneButtons">
+        <button type="button" class="btn-test-tone" data-test="drum" title="Sharp attack drum beat. Test limiter/clipper transient response and distortion resistance">🥁 Drum Transient (0dBFS)</button>
+        <button type="button" class="btn-test-tone" data-test="sine0" title="1kHz 0dBFS full-scale sine wave. Test ceiling accuracy and harmonic distortion">🔊 1kHz Sine (0dBFS)</button>
+        <button type="button" class="btn-test-tone" data-test="sine-12" title="1kHz -12dBFS standard level sine wave. Test linear transparency and low-level THD">🔉 1kHz Sine (-12dBFS)</button>
+        <button type="button" class="btn-test-tone" data-test="sweep" title="20Hz-20kHz logarithmic frequency sweep. Test full spectrum response">📈 Sine Sweep (20Hz-20k)</button>
+      </div>
+    </div>
+
+    <!-- Audio Player Controller -->
+    <div class="audio-bar" id="audioBar">
+      <div class="track-meta">
+        <div class="track-name" id="trackName">
+          <span>🎵</span> <span id="fileNameLabel">No audio loaded (drop an audio file to begin)</span>
+        </div>
+        <div class="track-stats" id="trackStats">
+          <span id="formatStats">Sample Rate: -- kHz</span>
+          <span id="channelStats">Channels: --</span>
+          <span id="durationStats">Duration: 0:00</span>
+        </div>
+      </div>
+
+      <!-- Waveform Overview / Seek Bar -->
+      <div class="waveform-container" id="waveformContainer" title="Overview waveform seekbar (red markers: original 0dBFS peaks)">
+        <canvas id="waveformCanvas" class="waveform-canvas"></canvas>
+        <div class="progress-overlay" id="progressOverlay"></div>
+        <div class="playhead" id="playhead"></div>
+      </div>
+
+      <!-- Controls Row -->
+      <div class="controls-row">
+        <div class="transport-buttons">
+          <button class="btn btn-primary" id="btnPlayPause" disabled>
+            <span id="playIcon">▶</span> <span id="playText">Play</span>
+          </button>
+          <button class="btn" id="btnStop" disabled>■ Stop</button>
+          <button class="btn" id="btnSkipBack" disabled title="Rewind 5s">⏮ 5s</button>
+          <button class="btn" id="btnSkipForward" disabled title="Forward 5s">5s ⏭</button>
+          <button class="btn" id="btnLoop" title="Loop Playback">🔁 Loop: OFF</button>
+        </div>
+
+        <div class="time-display">
+          <span id="currentTime">00:00.0</span> / <span id="totalTime">00:00.0</span>
+        </div>
+
+        <div class="volume-group">
+          <span>🔊 Volume:</span>
+          <input type="range" id="volSlider" min="0" max="1" step="0.01" value="0.8">
+          <span id="volValue">80%</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mastering Suite Rack (v2.0.0 Integrated) -->
+    <div class="mastering-section" id="masteringSection">
+      <div class="mastering-toggle-header" id="masteringToggleHeader">
+        <!-- Row 1: Title, label & collapse toggle -->
+        <div class="mastering-header-row-main">
+          <div class="mastering-toggle-title">
+            <span>🎛️</span>
+            <span>Mastering Console</span>
+            <span class="badge-master-gold">DSP Suite</span>
+            <span class="oversample-badge" id="dspEngineBadge">⚡ 32bit Float / Adaptive OS</span>
+          </div>
+          <div class="mastering-header-status-group">
+            <span style="font-size:0.75rem; color:var(--text-sub);" id="masteringStatusSummary">5 Modules Active</span>
+            <span id="masteringToggleArrow" style="font-size:0.8rem; color:var(--text-sub);">▼</span>
+          </div>
+        </div>
+
+        <!-- Row 2: Lower toolbar controls (always accessible when collapsed) -->
+        <div class="mastering-header-row-sub">
+          <button type="button" class="btn-master-power" id="globalBypassBtn" title="Toggle mastering on/off (A/B audition)">
+            <span class="pwr-dot"></span> <span id="globalBypassText">MASTERING: OFF</span>
+          </button>
+          <button type="button" class="btn-bypass-master active" id="gainMatchBtn" title="Auto loudness matching for transparent A/B audition">
+            Auto-Gain Match
+          </button>
+        </div>
+      </div>
+
+      <div class="mastering-content" id="masteringContent">
+        <div class="master-header-bar">
+          <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <label style="font-size:0.75rem; color:var(--text-sub); font-weight:700;">Preset:</label>
+            <select class="preset-selector" id="presetSelect">
+              <option value="clean" selected>Streaming Clean (-14 LUFS)</option>
+              <option value="warm">Warm Vintage Tape</option>
+              <option value="punch">Punchy Glue &amp; Snap</option>
+              <option value="loud">Commercial Loud (-9 LUFS)</option>
+              <option value="acoustic">Acoustic Clarity</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+
+          <div>
+            <button class="btn-export-wav" id="btnExportWav" disabled title="Export mastered audio to high-quality WAV">
+              💾 Export Master WAV
+            </button>
+          </div>
+        </div>
+
+        <!-- 5-Module Rack -->
+        <div class="mastering-rack" id="masteringRack">
+          <!-- 1. Clean & Tone -->
+          <div class="module-card" id="modClean">
+            <div class="module-header">
+              <div class="module-title"><span>🧹</span> 1. Clean &amp; Tone</div>
+              <button class="module-power-btn" id="pwrClean" title="Module Power"></button>
+            </div>
+            <div class="module-body">
+              <div class="switch-group">
+                <span class="switch-label">Low Cut (HPF)</span>
+                <div class="segmented-switch theme-cyan" id="swLowCut">
+                  <button type="button" class="switch-opt" data-val="0">OFF</button>
+                  <button type="button" class="switch-opt active" data-val="25">25Hz</button>
+                  <button type="button" class="switch-opt" data-val="35">35Hz</button>
+                </div>
+              </div>
+
+              <div class="switch-group">
+                <span class="switch-label">Mono Maker (Low-End Mono)</span>
+                <div class="segmented-switch theme-cyan" id="swMonoMaker">
+                  <button type="button" class="switch-opt" data-val="0">OFF</button>
+                  <button type="button" class="switch-opt" data-val="80">80Hz</button>
+                  <button type="button" class="switch-opt active" data-val="120">120Hz</button>
+                </div>
+              </div>
+
+              <div class="controls-grid">
+                <div class="knob-control" id="knobTone" data-id="tone" data-min="-6" data-max="6" data-val="0.5" data-unit="dB" data-step="0.1" data-default="0.0" data-label="Tone (Tilt)">
+                  <div class="knob-outer"><div class="knob-indicator"></div></div>
+                  <span class="knob-label">Tone (Tilt)</span>
+                  <span class="knob-val">+0.5 dB</span>
+                </div>
+
+                <div class="knob-control" id="knobAir" data-id="air" data-min="-3" data-max="6" data-val="1.2" data-unit="dB" data-step="0.1" data-default="0.0" data-label="Air (12k+)">
+                  <div class="knob-outer"><div class="knob-indicator"></div></div>
+                  <span class="knob-label">Air (12k+)</span>
+                  <span class="knob-val">+1.2 dB</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. Glue Comp -->
+          <div class="module-card" id="modComp">
+            <div class="module-header">
+              <div class="module-title"><span>🗜️</span> 2. Glue Comp</div>
+              <button class="module-power-btn" id="pwrComp" title="Module Power"></button>
+            </div>
+            <div class="module-body">
+              <div class="meter-container">
+                <div class="meter-label-row">
+                  <span>GAIN REDUCTION</span>
+                  <span id="grValText" style="color:var(--accent-r); font-family:monospace; font-weight:700;">0.0 dB</span>
+                </div>
+                <div class="meter-bar-track">
+                  <div class="meter-bar-fill-gr" id="grBarFill" style="width: 0%;"></div>
+                </div>
+                <div class="meter-scale-text">
+                  <span>-12</span><span>-8</span><span>-4</span><span>-2</span><span>0</span>
+                </div>
+              </div>
+
+              <div class="controls-grid">
+                <div class="knob-control" id="knobThreshold" data-id="threshold" data-min="-24" data-max="0" data-val="-10.5" data-unit="dB" data-step="0.5" data-default="-12.0" data-label="Threshold">
+                  <div class="knob-outer"><div class="knob-indicator"></div></div>
+                  <span class="knob-label">Threshold</span>
+                  <span class="knob-val">-10.5 dB</span>
+                </div>
+
+                <div class="knob-control" id="knobCompMix" data-id="compMix" data-min="0" data-max="100" data-val="85" data-unit="%" data-step="1" data-default="100" data-label="Mix (D/W)">
+                  <div class="knob-outer"><div class="knob-indicator"></div></div>
+                  <span class="knob-label">Mix (D/W)</span>
+                  <span class="knob-val">85 %</span>
+                </div>
+              </div>
+
+              <div class="switch-group">
+                <span class="switch-label">Ratio</span>
+                <div class="segmented-switch theme-gold" id="swRatio">
+                  <button type="button" class="switch-opt" data-val="2">2:1</button>
+                  <button type="button" class="switch-opt active" data-val="4">4:1</button>
+                  <button type="button" class="switch-opt" data-val="8">8:1</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 3. Saturator -->
+          <div class="module-card" id="modSat">
+            <div class="module-header">
+              <div class="module-title">
+                <span>🔥</span> 3. Saturator
+                <span class="oversample-badge" style="margin-left:4px;" id="satBadgeOS">4x OS</span>
+              </div>
+              <button class="module-power-btn" id="pwrSat" title="Module Power"></button>
+            </div>
+            <div class="module-body">
+              <div class="switch-group">
+                <span class="switch-label">Mode / Harmonics</span>
+                <div class="segmented-switch theme-gold" id="swSatMode">
+                  <button type="button" class="switch-opt active" data-val="tape">Tape (Odd)</button>
+                  <button type="button" class="switch-opt" data-val="tube">Tube (Even)</button>
+                </div>
+              </div>
+
+              <div class="controls-grid">
+                <div class="knob-control" id="knobDrive" data-id="drive" data-min="0" data-max="100" data-val="25" data-unit="%" data-step="1" data-default="0" data-label="Drive">
+                  <div class="knob-outer" style="--knob-line: var(--accent-r);"><div class="knob-indicator" style="background:var(--accent-r); box-shadow:0 0 6px var(--accent-r);"></div></div>
+                  <span class="knob-label">Drive</span>
+                  <span class="knob-val" style="color:var(--accent-r);">25 %</span>
+                </div>
+
+                <div class="knob-control" id="knobWarmth" data-id="warmth" data-min="-5" data-max="5" data-val="1.5" data-unit="dB" data-step="0.1" data-default="0.0" data-label="Warmth">
+                  <div class="knob-outer"><div class="knob-indicator"></div></div>
+                  <span class="knob-label">Warmth</span>
+                  <span class="knob-val">+1.5 dB</span>
+                </div>
+              </div>
+
+              <div class="switch-group">
+                <span class="switch-label">Oversampling Quality</span>
+                <div class="segmented-switch theme-cyan" id="swOversample">
+                  <button type="button" class="switch-opt" data-val="2x">2x</button>
+                  <button type="button" class="switch-opt active" data-val="4x">4x (Hi-Fi)</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. Stereo Width -->
+          <div class="module-card" id="modWidth">
+            <div class="module-header">
+              <div class="module-title"><span>🌐</span> 4. Stereo Width</div>
+              <button class="module-power-btn" id="pwrWidth" title="Module Power"></button>
+            </div>
+            <div class="module-body">
+              <div class="controls-grid single-col" style="margin: 4px 0;">
+                <div class="knob-control" id="knobSpread" data-id="spread" data-min="0" data-max="160" data-val="115" data-unit="%" data-step="1" data-default="100" data-label="Stereo Spread">
+                  <div class="knob-outer" style="width:56px; height:56px; --knob-line: #a855f7;">
+                    <div class="knob-indicator" style="background:#a855f7; box-shadow:0 0 8px #a855f7; height:18px; transform-origin: center 23px;"></div>
+                  </div>
+                  <span class="knob-label" style="font-size:0.75rem;">Stereo Spread</span>
+                  <span class="knob-val" style="font-size:0.8rem; color:#c084fc;">115 %</span>
+                </div>
+              </div>
+
+              <div class="meter-container" style="text-align:center;">
+                <div class="meter-label-row">
+                  <span>CORRELATION</span>
+                  <span id="widthPhaseStatus" style="color:var(--success); font-weight:700;">+0.90</span>
+                </div>
+                <div class="meter-bar-track">
+                  <div style="position:absolute; left:50%; width:1px; top:0; bottom:0; background:#fff; z-index:2;"></div>
+                  <div id="widthPhaseBar" style="position:absolute; left:50%; width:45%; top:0; bottom:0; background:var(--success); transition:width 0.1s ease, left 0.1s ease;"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 5. Maximizer -->
+          <div class="module-card" id="modMax" style="border-color: rgba(0, 240, 255, 0.4);">
+            <div class="module-header" style="background: rgba(0, 240, 255, 0.08);">
+              <div class="module-title"><span style="color:var(--accent-l);">⚡</span> 5. Maximizer</div>
+              <button class="module-power-btn" id="pwrMax" title="Module Power"></button>
+            </div>
+            <div class="module-body">
+              <div class="maximizer-meter-box">
+                <div class="lufs-display-row">
+                  <span style="font-size:0.68rem; color:var(--text-sub); font-weight:700;">LOUDNESS</span>
+                  <span class="lufs-target-badge" id="lufsTargetBadge">TARGET: -14.0 LUFS</span>
+                </div>
+                <div class="lufs-display-row">
+                  <div class="lufs-val-huge" id="lufsValue"><span id="lufsNum">-14.0</span> <span style="font-size:0.68rem; font-weight:500;">LUFS</span></div>
+                  <div style="font-size:0.65rem; text-align:right; font-family:monospace; color:var(--text-sub);">
+                    True Peak<br><span id="truePeakValue" style="color:#fff; font-weight:700;">-0.1 dBTP</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="controls-grid">
+                <div class="knob-control" id="knobBoost" data-id="boost" data-min="0" data-max="12" data-val="3.5" data-unit="dB" data-step="0.1" data-default="0.0" data-label="Gain Boost">
+                  <div class="knob-outer" style="--knob-line: var(--accent-l);"><div class="knob-indicator"></div></div>
+                  <span class="knob-label">Gain Boost</span>
+                  <span class="knob-val" style="color:var(--accent-l);">+3.5 dB</span>
+                </div>
+
+                <div class="knob-control" id="knobCeiling" data-id="ceiling" data-min="-6.0" data-max="0.0" data-val="-0.1" data-unit="dB" data-step="0.1" data-default="-0.1" data-label="Ceiling">
+                  <div class="knob-outer"><div class="knob-indicator"></div></div>
+                  <span class="knob-label">Ceiling</span>
+                  <span class="knob-val">-0.1 dB</span>
+                </div>
+              </div>
+
+              <div class="switch-group">
+                <span class="switch-label">Limiter Response</span>
+                <div class="segmented-switch theme-cyan" id="swLimiterResponse">
+                  <button type="button" class="switch-opt" data-val="punchy">Punchy</button>
+                  <button type="button" class="switch-opt active" data-val="smooth">Smooth</button>
+                  <button type="button" class="switch-opt" data-val="fast">Fast</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Floating Parameter Precision Popover -->
+    <div id="paramPopover" class="param-popover" style="display: none;">
+      <div class="popover-header">
+        <div class="popover-title-row">
+          <span class="popover-title" id="popoverTitle">Tone (Tilt)</span>
+          <span class="popover-hint">Tap outside to close</span>
+        </div>
+        <button type="button" class="popover-reset-btn" id="popoverResetBtn">Reset</button>
+      </div>
+      <div class="popover-val-row">
+        <span class="popover-val-display" id="popoverValDisplay">+0.5 dB</span>
+      </div>
+      <div class="popover-controls">
+        <button type="button" class="popover-step-btn" id="popoverMinusBtn" aria-label="Decrease">−</button>
+        <div class="popover-slider-wrap">
+          <input type="range" id="popoverSlider" class="popover-slider">
+        </div>
+        <button type="button" class="popover-step-btn" id="popoverPlusBtn" aria-label="Increase">＋</button>
+      </div>
+      <div class="popover-range-labels">
+        <span id="popoverMinLabel">-6.0 dB</span>
+        <span id="popoverMidLabel">0.0 dB</span>
+        <span id="popoverMaxLabel">+6.0 dB</span>
+      </div>
+    </div>
+
+    <!-- WAV Export Modal -->
+    <div id="exportWavModal" class="export-modal-backdrop" style="display: none;">
+      <div class="export-modal-card" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
+        <div class="export-modal-header">
+          <div class="export-modal-title" id="exportModalTitle">
+            <span>💾</span> WAV Master Export
+          </div>
+          <button type="button" class="export-modal-close" id="btnExportModalClose" aria-label="Close">×</button>
+        </div>
+        <div class="export-modal-body">
+          <div class="export-info-box">
+            <span class="export-info-label">Source Audio Specs</span>
+            <span class="export-info-val" id="exportSourceSpec">-- kHz / 2ch / 0:00</span>
+          </div>
+
+          <div class="export-form-group">
+            <label class="export-form-label" for="exportSampleRateSelect">Sample Rate</label>
+            <select id="exportSampleRateSelect" class="export-select">
+              <!-- Dynamically populated (1x, 2x, 4x, etc.) -->
+            </select>
+            <div class="export-hint" id="exportRateHint">
+              * Resampled using Kaiser-windowed Sinc interpolation with steep anti-aliasing LPF for zero aliasing.
+            </div>
+          </div>
+
+          <div class="export-form-group">
+            <label class="export-form-label" for="exportBitDepthSelect">Bit Depth</label>
+            <select id="exportBitDepthSelect" class="export-select">
+              <option value="16">16-bit PCM (TPDF Dither / CD Standard)</option>
+              <option value="24" selected>24-bit PCM (Studio Master / 144dB Dynamic Range)</option>
+              <option value="32">32-bit Float (IEEE 754 / DAW / Clip-Free)</option>
+            </select>
+            <div class="export-hint" id="exportBitHint">
+              * Applies Triangular Probability Density Function (TPDF) dither to eliminate quantization distortion for 16-bit export.
+            </div>
+          </div>
+
+          <!-- Blank & Fade Settings Section -->
+          <div class="export-section-divider">
+            <span>Blanks & Anti-Click Fades</span>
+          </div>
+
+          <div class="export-form-row">
+            <div class="export-form-group flex-1">
+              <label class="export-form-label" for="exportLeadInSelect">Lead-in Blank</label>
+              <select id="exportLeadInSelect" class="export-select">
+                <option value="0">None (0.0s / Loop)</option>
+                <option value="0.1">0.1 s (Minimal)</option>
+                <option value="0.2" selected>0.2 s (Recommended)</option>
+                <option value="0.5">0.5 s (Streaming / CD)</option>
+                <option value="1.0">1.0 s (Spacious)</option>
+              </select>
+            </div>
+
+            <div class="export-form-group flex-1">
+              <label class="export-form-label" for="exportLeadOutSelect">Lead-out Blank</label>
+              <select id="exportLeadOutSelect" class="export-select">
+                <option value="0">None (0.0s / Loop)</option>
+                <option value="0.5">0.5 s (Short)</option>
+                <option value="1.0" selected>1.0 s (Tail Protection / Recommended)</option>
+                <option value="2.0">2.0 s (Standard Gap)</option>
+                <option value="3.0">3.0 s (Long Reverb Tail)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="export-checkbox-group">
+            <label class="export-checkbox-label">
+              <input type="checkbox" id="exportMicroFadeCheck" checked>
+              <span><strong>Apply anti-click micro-fade</strong> (S-curve)</span>
+            </label>
+            <div class="export-hint">
+              * Applies micro-fade (10ms start / 20ms end) to prevent click artifacts and DC offset pops at file boundaries.
+            </div>
+          </div>
+
+          <div class="export-estimate-box">
+            <span>Estimated File Size:</span>
+            <strong id="exportEstimatedSize">~ -- MB</strong>
+          </div>
+        </div>
+        <div class="export-modal-footer">
+          <button type="button" class="btn-modal-cancel" id="btnExportModalCancel">Cancel</button>
+          <button type="button" class="btn-modal-confirm" id="btnExportModalExecute">Render & Export WAV</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Visualizer Grid -->
+    <div class="analyzer-grid">
+      <!-- Left: Frequency Spectrum Analyzer -->
+      <div class="card card-spectrum">
+        <div class="card-header card-header-spectrum">
+          <div class="card-header-main">
+            <div class="card-title" id="mainDisplayTitle">
+              <span>📊</span> Frequency Spectrum
+            </div>
+            <div class="header-badges-left" style="display:inline-flex; align-items:center; gap:6px;">
+              <span class="peak-badge fps-badge" id="fpsBadge" title="Rendering Frame Rate (FPS)">-- FPS</span>
+              <span class="peak-badge clip-history-badge has-clip" id="spectrumClipSummaryBadge" style="display: none; cursor: pointer;" title="Post-mastering clip count (Click or ↺ to reset)">⚠ CLIP 0</span>
+            </div>
+          </div>
+          <div class="peak-badge-group">
+            <span class="peak-badge" id="peakLevelBadge" title="Instantaneous peak level (Red indicator on clip / ↺ to reset)">L: -- dB | R: -- dB</span>
+            <button class="btn-xs" id="btnResetSpectrumPeak" title="Reset peak hold values">↺</button>
+          </div>
+        </div>
+        <div class="card-toolbar">
+          <div class="toolbar-item">
+            <div class="btn-group-sm" id="displayModeGroup" title="Select analyzer display mode">
+              <button type="button" class="btn-mode active" data-mode="spectrum" id="btnModeSpectrum">📊 Spectrum</button>
+              <button type="button" class="btn-mode" data-mode="spectrogram" id="btnModeSpectrogram">🌊 Spectrogram</button>
+              <button type="button" class="btn-mode" data-mode="oscilloscope" id="btnModeOscilloscope">〰️ Oscilloscope</button>
+            </div>
+          </div>
+          <div class="toolbar-item" id="fftSizeItem">
+            <label class="toolbar-label" for="fftSizeSelect">FFT:</label>
+            <select class="select-sm" id="fftSizeSelect" title="FFT Resolution">
+              <option value="multi" selected>Multi-Res (MRFFT)</option>
+              <option value="1024">1024 (Fast)</option>
+              <option value="2048">2048 (Standard)</option>
+              <option value="4096">4096 (High Res)</option>
+              <option value="8192">8192 (Ultra Res)</option>
+            </select>
+          </div>
+          <div class="toolbar-item" id="viewModeItem">
+            <label class="toolbar-label" for="viewModeSelect">Mode:</label>
+            <select class="select-sm" id="viewModeSelect" title="Display Mode">
+              <option value="overlay" selected>Overlay</option>
+              <option value="split">Split</option>
+              <option value="difference">Difference (L-R)</option>
+            </select>
+          </div>
+          <div class="toolbar-item" id="smoothingItem">
+            <label class="toolbar-label" for="smoothingSelect">Speed:</label>
+            <select class="select-sm" id="smoothingSelect" title="Smoothing">
+              <option value="0.5">Fast</option>
+              <option value="0.75" selected>Normal</option>
+              <option value="0.9">Smooth</option>
+            </select>
+          </div>
+        </div>
+        <div class="canvas-wrapper" id="spectrumWrapper">
+          <canvas id="spectrumCanvas" class="display-canvas"></canvas>
+          <div class="canvas-tooltip" id="spectrumTooltip"></div>
+        </div>
+      </div>
+
+      <!-- Right: Stereo Goniometer / Lissajous & Balance -->
+      <div class="right-panels">
+        <!-- Goniometer (Vectorscope / Lissajous) -->
+        <div class="card card-gonio">
+          <div class="card-header">
+            <div class="card-title">
+              <span>🎯</span> Stereo Goniometer
+            </div>
+            <div class="peak-badge-group">
+              <span class="peak-badge" id="gonioPeakLevelBadge" title="Real-time peak level (Lights up on clip)">Level: -- dB</span>
+              <span class="peak-badge clip-history-badge" id="gonioHistoryBadge" title="Max peak history (↺ to reset)">Max: -- dB</span>
+              <span class="peak-badge" id="gonioMinPhaseBadge" title="Minimum phase correlation recorded">Min φ: --</span>
+              <button class="btn-xs" id="btnResetGonioPeak" title="Reset goniometer peak">↺</button>
+            </div>
+          </div>
+          <div class="canvas-wrapper goniometer-wrapper">
+            <canvas id="gonioCanvas" class="display-canvas"></canvas>
+          </div>
+        </div>
+
+        <!-- Stereo Phase Correlation & Spectral Balance -->
+        <div class="card card-meters">
+          <div class="card-header">
+            <div class="card-title">
+              <span>⚖️</span> Timbre Balance & Phase Correlation
+            </div>
+          </div>
+          <div class="meter-section">
+            <!-- Phase Correlation Meter -->
+            <div class="meter-item">
+              <div class="meter-header">
+                <span>Phase Correlation</span>
+                <span class="meter-val" id="correlationVal">+1.00</span>
+              </div>
+              <div class="phase-bar-track">
+                <div class="phase-center-mark"></div>
+                <div class="phase-bar-fill" id="correlationBar"></div>
+              </div>
+              <div style="display:flex; justify-content:space-between; font-size:0.68rem; color:var(--text-sub);">
+                <span>-1.0 (Out of Phase)</span>
+                <span>0.0 (Stereo)</span>
+                <span>+1.0 (In Phase / Mono)</span>
+              </div>
+            </div>
+
+            <!-- Multi-Band Stereo Timbre Balance -->
+            <div class="meter-item">
+              <div class="meter-header">
+                <span>Multi-Band Energy Balance (L / R)</span>
+                <span style="font-size:0.7rem; color:var(--text-sub);">◄ L | R ►</span>
+              </div>
+              <div class="bands-container" id="bandsContainer">
+                <!-- Dynamically populated band meters -->
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer>
+    Web Audio Mastering Analyzer
+  </footer>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
