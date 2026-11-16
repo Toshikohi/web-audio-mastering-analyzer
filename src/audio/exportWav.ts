@@ -263,7 +263,45 @@ export async function executeExportWav() {
 
     // Build mastering chain on offlineCtx
     const offlineChain = createMasteringChain(offlineCtx, state.mastering);
-    offlineSource.connect(offlineChain.input);
+
+    // Pre-chain anti-click micro-fade (10ms start / 20ms end S-curve) so the fade
+    // aligns with the actual audio boundaries before mastering latency / dynamics.
+    if (applyMicroFade && srcDuration > 0) {
+      const fadeGain = offlineCtx.createGain();
+      const maxFadeSec = srcDuration * 0.4;
+      const fadeInSec = Math.min(0.010, maxFadeSec);
+      const fadeOutSec = Math.min(0.020, maxFadeSec);
+      const curveLen = 128;
+
+      if (leadInSec > 0) {
+        fadeGain.gain.setValueAtTime(0, 0);
+      }
+
+      if (fadeInSec > 0) {
+        const fadeInCurve = new Float32Array(curveLen);
+        for (let i = 0; i < curveLen; i++) {
+          const t = i / (curveLen - 1);
+          fadeInCurve[i] = 0.5 * (1 - Math.cos(Math.PI * t)); // S-curve 0 -> 1
+        }
+        fadeGain.gain.setValueCurveAtTime(fadeInCurve, leadInSec, fadeInSec);
+      }
+
+      if (fadeOutSec > 0) {
+        const fadeOutStartSec = leadInSec + srcDuration - fadeOutSec;
+        const fadeOutCurve = new Float32Array(curveLen);
+        for (let i = 0; i < curveLen; i++) {
+          const t = i / (curveLen - 1);
+          fadeOutCurve[i] = 0.5 * (1 + Math.cos(Math.PI * t)); // S-curve 1 -> 0
+        }
+        fadeGain.gain.setValueCurveAtTime(fadeOutCurve, fadeOutStartSec, fadeOutSec);
+      }
+
+      offlineSource.connect(fadeGain);
+      fadeGain.connect(offlineChain.input);
+    } else {
+      offlineSource.connect(offlineChain.input);
+    }
+
     offlineChain.output.connect(offlineCtx.destination);
 
     // Start playback with leadInSec offset to ensure DSP stability
@@ -272,56 +310,35 @@ export async function executeExportWav() {
     // Offline rendering
     const renderedBuffer = await offlineCtx.startRendering();
 
-    // --- Anti-click micro-fade (10ms start / 20ms end S-curve) & blank padding ---
+    // --- Blank padding while preserving mastering chain latency + release tail ---
     const leadInSamples = Math.round(leadInSec * targetRate);
     const soundEndSamples = Math.min(totalSamples, Math.round((leadInSec + srcDuration) * targetRate));
+    // PDC (3ms) + DynamicsCompressor/Limiter lookahead (~12ms) + short release margin
+    const dspTailSamples = Math.round(0.050 * targetRate);
+    const tailEndSamples = Math.min(totalSamples, soundEndSamples + dspTailSamples);
+    const tailFadeSamples = Math.min(dspTailSamples, Math.round(0.005 * targetRate));
 
-    if (applyMicroFade) {
-      const fadeInSec = 0.010; // 10ms
-      const fadeOutSec = 0.020; // 20ms
-      const fadeInSamples = Math.min(soundEndSamples - leadInSamples, Math.round(fadeInSec * targetRate));
-      const fadeOutSamples = Math.min(soundEndSamples - leadInSamples, Math.round(fadeOutSec * targetRate));
-      const fadeOutStartSamples = Math.max(leadInSamples, soundEndSamples - fadeOutSamples);
+    for (let ch = 0; ch < numChannels; ch++) {
+      const data = renderedBuffer.getChannelData(ch);
 
-      for (let ch = 0; ch < numChannels; ch++) {
-        const data = renderedBuffer.getChannelData(ch);
+      // 1. Clear lead-in blank section
+      for (let i = 0; i < leadInSamples; i++) {
+        data[i] = 0;
+      }
 
-        // 1. Clear lead-in blank section
-        for (let i = 0; i < leadInSamples; i++) {
-          data[i] = 0;
-        }
-
-        // 2. Micro-fade in (10ms): S-curve sin^2((pi/2) * (i / L))
-        for (let i = 0; i < fadeInSamples; i++) {
-          const idx = leadInSamples + i;
-          if (idx < soundEndSamples) {
-            const t = i / fadeInSamples;
-            const gain = 0.5 * (1 - Math.cos(Math.PI * t)); // S-curve 0 -> 1
-            data[idx] *= gain;
-          }
-        }
-
-        // 3. Micro-fade out (20ms): S-curve cos^2((pi/2) * (j / L))
-        for (let j = 0; j < fadeOutSamples; j++) {
-          const idx = fadeOutStartSamples + j;
-          if (idx < soundEndSamples) {
-            const t = j / fadeOutSamples;
-            const gain = 0.5 * (1 + Math.cos(Math.PI * t)); // S-curve 1 -> 0
-            data[idx] *= gain;
-          }
-        }
-
-        // 4. Clear lead-out blank section
-        for (let k = soundEndSamples; k < totalSamples; k++) {
-          data[k] = 0;
+      // 2. Smooth any residual DSP noise floor right before clearing lead-out
+      if (tailEndSamples < totalSamples && tailEndSamples > soundEndSamples) {
+        const fadeStart = Math.max(soundEndSamples, tailEndSamples - tailFadeSamples);
+        const span = tailEndSamples - fadeStart;
+        for (let j = 0; j < span; j++) {
+          const t = (j + 1) / span;
+          data[fadeStart + j] *= 0.5 * (1 + Math.cos(Math.PI * t));
         }
       }
-    } else {
-      // Zero blanks even if micro-fade is disabled
-      for (let ch = 0; ch < numChannels; ch++) {
-        const data = renderedBuffer.getChannelData(ch);
-        for (let i = 0; i < leadInSamples; i++) data[i] = 0;
-        for (let k = soundEndSamples; k < totalSamples; k++) data[k] = 0;
+
+      // 3. Clear lead-out blank section
+      for (let k = tailEndSamples; k < totalSamples; k++) {
+        data[k] = 0;
       }
     }
 

@@ -9,6 +9,8 @@ export function createMasteringChain(ctx, mState) {
   const output = ctx.createGain();
   const dryGain = ctx.createGain(); // Global Bypass path
   const wetGain = ctx.createGain(); // Global Wet path
+  dryGain.gain.value = mState.bypass ? 1.0 : 0.0;
+  wetGain.gain.value = mState.bypass ? 0.0 : 1.0;
   const matchGain = ctx.createGain();
 
   const initMatch = (mState.gainMatch && !mState.bypass && mState.max.enabled)
